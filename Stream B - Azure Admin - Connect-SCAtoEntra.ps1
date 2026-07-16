@@ -47,7 +47,7 @@
     CCE Identity Audience for the CCE app federated credential.
 
 .EXAMPLE
-    .\Connect-SCAtoEntra.ps1 `
+    .\"Stream B - Azure Admin - Connect-SCAtoEntra.ps1" `
         -EntraId           "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
         -Platform          "Idira" `
         -ScaIdentityIssuerEntra    "https://..." `
@@ -163,7 +163,7 @@ $ScaEntraRoleDef = @{
     IsCustom         = $true
     Actions          = @()
     AssignableScopes = @($RoleScope)
-} | ConvertTo-Json -Depth 5
+} | ConvertTo-Json -Depth 5 -Compress
 
 $ScaEntraRoleResult = Invoke-Az @(
     'role', 'definition', 'create',
@@ -185,7 +185,7 @@ $ScaResourcesRoleDef = @{
         'Microsoft.Management/managementGroups/read'
     )
     AssignableScopes = @($RoleScope)
-} | ConvertTo-Json -Depth 5
+} | ConvertTo-Json -Depth 5 -Compress
 
 $ScaResourcesRoleResult = Invoke-Az @(
     'role', 'definition', 'create',
@@ -346,7 +346,7 @@ $CceAppId = (Invoke-Az @(
 )).Trim()
 Write-Done "CCE App ID: $CceAppId"
 
-# -- Step 2.3  Federated credential ------------------------------------------
+# -- Step 2.2 / 2.3  Identity parameters are passed as script parameters; create federated credential --
 
 Write-Step "Creating federated credential on CCE app"
 $CceCred = @{
