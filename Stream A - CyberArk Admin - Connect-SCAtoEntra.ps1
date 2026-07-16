@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     CyberArk admin script for connecting ACME's Azure Entra tenant to the
@@ -21,6 +21,15 @@
 .PARAMETER Subdomain
     Your CyberArk tenant subdomain.
     The API base URL will be https://<Subdomain>.cloudonboarding.cyberark.cloud
+
+.PARAMETER IdentityTenantId
+    The internal identity tenant ID used to construct the token URL:
+    https://<IdentityTenantId>.id.cyberark.cloud/oauth2/platformtoken
+    This is NOT the same as the portal subdomain. Find it by logging into
+    the CyberArk ISP portal and checking Settings > General, or by
+    inspecting the login page source for the ShellUrl/tenant hostname.
+    Example: if the token URL is https://acm4048.id.cyberark.cloud/... then
+    the IdentityTenantId is "acm4048".
 
 .PARAMETER ClientId
     Client ID of the service account used to authenticate to the CyberArk
@@ -58,16 +67,18 @@
 .EXAMPLE
     # Phase 1 — retrieve identity parameters
     .\Stream A - CyberArk Admin - Connect-SCAtoEntra.ps1 `
-        -Phase        1 `
-        -Subdomain    "acme" `
-        -ClientId     "svc-account@acme" `
-        -ClientSecret "s3cr3t"
+        -Phase              1 `
+        -Subdomain          "acme" `
+        -IdentityTenantId   "acm4048" `
+        -ClientId           "svc-account@acme" `
+        -ClientSecret       "s3cr3t"
 
 .EXAMPLE
     # Phase 2 — register the tenant
     .\Stream A - CyberArk Admin - Connect-SCAtoEntra.ps1 `
         -Phase                           2 `
         -Subdomain                       "acme" `
+        -IdentityTenantId                "acm4048" `
         -ClientId                        "svc-account@acme" `
         -ClientSecret                    "s3cr3t" `
         -EntraId                         "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
@@ -82,6 +93,7 @@
 param (
     [Parameter(Mandatory)][ValidateSet(1, 2)][int] $Phase,
     [Parameter(Mandatory)][string] $Subdomain,
+    [Parameter(Mandatory)][string] $IdentityTenantId,
     [Parameter(Mandatory)][string] $ClientId,
     [Parameter(Mandatory)][string] $ClientSecret,
 
@@ -112,16 +124,14 @@ function Write-Done {
 }
 
 $BaseUrl = "https://$Subdomain.cloudonboarding.cyberark.cloud"
+$Headers = $null
 
 function Get-CyberArkToken {
     $tokenResponse = Invoke-RestMethod `
-        -Method Post `
-        -Uri    "https://$Subdomain.id.cyberark.cloud/oauth2/platformtoken" `
-        -Body   @{
-            grant_type    = 'client_credentials'
-            client_id     = $ClientId
-            client_secret = $ClientSecret
-        }
+        -Method      Post `
+        -Uri         "https://$IdentityTenantId.id.cyberark.cloud/oauth2/platformtoken" `
+        -ContentType 'application/x-www-form-urlencoded' `
+        -Body        "grant_type=client_credentials&client_id=$([uri]::EscapeDataString($ClientId))&client_secret=$([uri]::EscapeDataString($ClientSecret))"
     return $tokenResponse.access_token
 }
 
@@ -257,7 +267,9 @@ Write-Done "Tenant registered successfully."
 
 # -- Step 3.3 — Save the onboarding ID --------------------------------------
 
-$OnboardingId = $Response.id ?? $Response.onboardingId ?? $Response.PSObject.Properties.Value[0]
+if ($Response.id)             { $OnboardingId = $Response.id }
+elseif ($Response.onboardingId) { $OnboardingId = $Response.onboardingId }
+else                            { $OnboardingId = $Response.PSObject.Properties.Value[0] }
 
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor Yellow

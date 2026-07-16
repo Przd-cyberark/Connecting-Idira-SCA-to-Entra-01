@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     Removes all Azure resources created by Stream B and optionally deregisters
@@ -27,8 +27,14 @@
     The platform name used when running Stream B (e.g. "Idira" or "CyberArk").
 
 .PARAMETER Subdomain
-    (Optional) CyberArk ISP tenant subdomain.
-    Required together with -ClientId, -ClientSecret, and -OnboardingId to run Step 4.
+    (Optional) CyberArk ISP portal subdomain (e.g. "acme" from acme.cyberark.cloud).
+    Required together with -IdentityTenantId, -ClientId, -ClientSecret, and -OnboardingId to run Step 4.
+
+.PARAMETER IdentityTenantId
+    (Optional) The internal identity tenant ID used to construct the token URL:
+    https://<IdentityTenantId>.id.cyberark.cloud/oauth2/platformtoken
+    This is NOT the same as the portal subdomain.
+    Required together with -Subdomain, -ClientId, -ClientSecret, and -OnboardingId to run Step 4.
 
 .PARAMETER ClientId
     (Optional) Client ID of the service account used to authenticate to CyberArk ISP.
@@ -54,22 +60,24 @@
 .EXAMPLE
     # Full cleanup — Azure + CyberArk ISP
     .\Test - Cleanup-AzureResources.ps1 `
-        -EntraId       "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
-        -Platform      "Idira" `
-        -Subdomain     "acme" `
-        -ClientId      "svc-account@acme" `
-        -ClientSecret  "s3cr3t" `
-        -OnboardingId  "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+        -EntraId           "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
+        -Platform          "Idira" `
+        -Subdomain         "acme" `
+        -IdentityTenantId  "acm4048" `
+        -ClientId          "svc-account@acme" `
+        -ClientSecret      "s3cr3t" `
+        -OnboardingId      "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 
 .EXAMPLE
     # Full cleanup without confirmation prompt
     .\Test - Cleanup-AzureResources.ps1 `
-        -EntraId       "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
-        -Platform      "Idira" `
-        -Subdomain     "acme" `
-        -ClientId      "svc-account@acme" `
-        -ClientSecret  "s3cr3t" `
-        -OnboardingId  "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
+        -EntraId           "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
+        -Platform          "Idira" `
+        -Subdomain         "acme" `
+        -IdentityTenantId  "acm4048" `
+        -ClientId          "svc-account@acme" `
+        -ClientSecret      "s3cr3t" `
+        -OnboardingId      "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
         -Force
 #>
 
@@ -78,6 +86,7 @@ param (
     [Parameter(Mandatory)][string] $EntraId,
     [Parameter(Mandatory)][string] $Platform,
     [string] $Subdomain,
+    [string] $IdentityTenantId,
     [string] $ClientId,
     [string] $ClientSecret,
     [string] $OnboardingId,
@@ -179,7 +188,7 @@ Write-Host "  CCE App ID          : $(if ($CceAppId)          { $CceAppId }     
 # Confirmation
 # ---------------------------------------------------------------------------
 
-$CyberArkCleanup = $Subdomain -and $ClientId -and $ClientSecret -and $OnboardingId
+$CyberArkCleanup = $Subdomain -and $IdentityTenantId -and $ClientId -and $ClientSecret -and $OnboardingId
 
 if (-not $Force) {
     Write-Host ""
@@ -190,7 +199,7 @@ if (-not $Force) {
     if ($CyberArkCleanup) {
         Write-Host "    - CyberArk ISP tenant registration (onboarding ID: $OnboardingId)"
     } else {
-        Write-Host "    - CyberArk ISP: SKIPPED (no -Subdomain / -ClientId / -ClientSecret / -OnboardingId provided)" -ForegroundColor DarkGray
+        Write-Host "    - CyberArk ISP: SKIPPED (no -Subdomain / -IdentityTenantId / -ClientId / -ClientSecret / -OnboardingId provided)" -ForegroundColor DarkGray
     }
     Write-Host ""
     $confirm = Read-Host "  Type 'yes' to proceed"
@@ -245,13 +254,10 @@ if (-not $CyberArkCleanup) {
 
         Write-Host "    Obtaining bearer token from CyberArk ISP ..." -ForegroundColor DarkGray
         $tokenResponse = Invoke-RestMethod `
-            -Method Post `
-            -Uri    "https://$Subdomain.id.cyberark.cloud/oauth2/platformtoken" `
-            -Body   @{
-                grant_type    = 'client_credentials'
-                client_id     = $ClientId
-                client_secret = $ClientSecret
-            }
+            -Method      Post `
+            -Uri         "https://$IdentityTenantId.id.cyberark.cloud/oauth2/platformtoken" `
+            -ContentType 'application/x-www-form-urlencoded' `
+            -Body        "grant_type=client_credentials&client_id=$([uri]::EscapeDataString($ClientId))&client_secret=$([uri]::EscapeDataString($ClientSecret))"
         $Headers = @{
             Authorization  = "Bearer $($tokenResponse.access_token)"
             'Content-Type' = 'application/json'

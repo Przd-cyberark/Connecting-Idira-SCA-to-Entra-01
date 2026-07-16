@@ -1,4 +1,4 @@
-#Requires -Version 7.0
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     Connects ACME's Azure Entra tenant to CyberArk Identity Security Platform (SCA + CCE).
