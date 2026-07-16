@@ -28,15 +28,19 @@
 
 .PARAMETER Subdomain
     (Optional) CyberArk ISP tenant subdomain.
-    Required together with -BearerToken and -OnboardingId to run Step 4.
+    Required together with -ClientId, -ClientSecret, and -OnboardingId to run Step 4.
 
-.PARAMETER BearerToken
-    (Optional) Valid bearer token for the CyberArk Identity Security Platform.
-    Required together with -Subdomain and -OnboardingId to run Step 4.
+.PARAMETER ClientId
+    (Optional) Client ID of the service account used to authenticate to CyberArk ISP.
+    Required together with -Subdomain, -ClientSecret, and -OnboardingId to run Step 4.
+
+.PARAMETER ClientSecret
+    (Optional) Client secret corresponding to -ClientId.
+    Required together with -Subdomain, -ClientId, and -OnboardingId to run Step 4.
 
 .PARAMETER OnboardingId
     (Optional) The onboarding ID returned by Stream A Phase 2.
-    Required together with -Subdomain and -BearerToken to run Step 4.
+    Required together with -Subdomain, -ClientId, and -ClientSecret to run Step 4.
 
 .PARAMETER Force
     Skip the confirmation prompt and delete immediately.
@@ -53,7 +57,8 @@
         -EntraId       "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
         -Platform      "Idira" `
         -Subdomain     "acme" `
-        -BearerToken   "eyJ..." `
+        -ClientId      "svc-account@acme" `
+        -ClientSecret  "s3cr3t" `
         -OnboardingId  "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 
 .EXAMPLE
@@ -62,7 +67,8 @@
         -EntraId       "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
         -Platform      "Idira" `
         -Subdomain     "acme" `
-        -BearerToken   "eyJ..." `
+        -ClientId      "svc-account@acme" `
+        -ClientSecret  "s3cr3t" `
         -OnboardingId  "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
         -Force
 #>
@@ -72,7 +78,8 @@ param (
     [Parameter(Mandatory)][string] $EntraId,
     [Parameter(Mandatory)][string] $Platform,
     [string] $Subdomain,
-    [string] $BearerToken,
+    [string] $ClientId,
+    [string] $ClientSecret,
     [string] $OnboardingId,
     [switch] $Force
 )
@@ -172,7 +179,7 @@ Write-Host "  CCE App ID          : $(if ($CceAppId)          { $CceAppId }     
 # Confirmation
 # ---------------------------------------------------------------------------
 
-$CyberArkCleanup = $Subdomain -and $BearerToken -and $OnboardingId
+$CyberArkCleanup = $Subdomain -and $ClientId -and $ClientSecret -and $OnboardingId
 
 if (-not $Force) {
     Write-Host ""
@@ -183,7 +190,7 @@ if (-not $Force) {
     if ($CyberArkCleanup) {
         Write-Host "    - CyberArk ISP tenant registration (onboarding ID: $OnboardingId)"
     } else {
-        Write-Host "    - CyberArk ISP: SKIPPED (no -Subdomain / -BearerToken / -OnboardingId provided)" -ForegroundColor DarkGray
+        Write-Host "    - CyberArk ISP: SKIPPED (no -Subdomain / -ClientId / -ClientSecret / -OnboardingId provided)" -ForegroundColor DarkGray
     }
     Write-Host ""
     $confirm = Read-Host "  Type 'yes' to proceed"
@@ -231,21 +238,32 @@ Remove-AppIfExists $CceAppId          $CceAppName
 Write-Step "Step 4 — Deregistering tenant from CyberArk ISP"
 
 if (-not $CyberArkCleanup) {
-    Write-Skip "CyberArk ISP cleanup (-Subdomain, -BearerToken, and -OnboardingId not all provided)"
+    Write-Skip "CyberArk ISP cleanup (-Subdomain, -ClientId, -ClientSecret, and -OnboardingId not all provided)"
 } else {
     try {
         $BaseUrl = "https://$Subdomain.cloudonboarding.cyberark.cloud"
+
+        Write-Host "    Obtaining bearer token from CyberArk ISP ..." -ForegroundColor DarkGray
+        $tokenResponse = Invoke-RestMethod `
+            -Method Post `
+            -Uri    "https://$Subdomain.id.cyberark.cloud/oauth2/platformtoken" `
+            -Body   @{
+                grant_type    = 'client_credentials'
+                client_id     = $ClientId
+                client_secret = $ClientSecret
+            }
         $Headers = @{
-            Authorization  = "Bearer $BearerToken"
+            Authorization  = "Bearer $($tokenResponse.access_token)"
             'Content-Type' = 'application/json'
         }
+        Write-Host "    Bearer token retrieved" -ForegroundColor DarkGray
 
         # NOTE: endpoint follows the standard CCE REST pattern for tenant deletion.
         # If this returns 404, verify the exact URL against your tenant's API docs.
-        $Response = Invoke-RestMethod `
+        Invoke-RestMethod `
             -Method  Delete `
             -Uri     "$BaseUrl/api/azure/tenants/$OnboardingId" `
-            -Headers $Headers
+            -Headers $Headers | Out-Null
 
         Write-Done "Tenant '$OnboardingId' deregistered from CyberArk ISP"
     } catch {
@@ -268,7 +286,7 @@ Write-Host "  Cleanup complete." -ForegroundColor Green
 if (-not $CyberArkCleanup) {
     Write-Host "  NOTE: CyberArk ISP cleanup was skipped." -ForegroundColor Yellow
     Write-Host "  To also remove the tenant registration, re-run with:" -ForegroundColor Yellow
-    Write-Host "    -Subdomain <subdomain> -BearerToken <token> -OnboardingId <id>" -ForegroundColor Yellow
+    Write-Host "    -Subdomain <subdomain> -ClientId <id> -ClientSecret <secret> -OnboardingId <id>" -ForegroundColor Yellow
 }
 Write-Host "================================================================" -ForegroundColor Green
 Write-Host ""

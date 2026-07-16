@@ -22,9 +22,13 @@
     Your CyberArk tenant subdomain.
     The API base URL will be https://<Subdomain>.cloudonboarding.cyberark.cloud
 
-.PARAMETER BearerToken
-    A valid bearer token for the CyberArk Identity Security Platform.
-    Obtain this from your tenant's Identity portal before running the script.
+.PARAMETER ClientId
+    Client ID of the service account used to authenticate to the CyberArk
+    Identity Security Platform. Used to obtain a bearer token automatically
+    via the /oauth2/platformtoken endpoint.
+
+.PARAMETER ClientSecret
+    Client secret corresponding to -ClientId.
 
 .PARAMETER Phase
     Which phase to execute:
@@ -54,29 +58,32 @@
 .EXAMPLE
     # Phase 1 — retrieve identity parameters
     .\Stream A - CyberArk Admin - Connect-SCAtoEntra.ps1 `
-        -Phase       1 `
-        -Subdomain   "acme" `
-        -BearerToken "eyJ..."
+        -Phase        1 `
+        -Subdomain    "acme" `
+        -ClientId     "svc-account@acme" `
+        -ClientSecret "s3cr3t"
 
 .EXAMPLE
     # Phase 2 — register the tenant
     .\Stream A - CyberArk Admin - Connect-SCAtoEntra.ps1 `
-        -Phase                          2 `
-        -Subdomain                      "acme" `
-        -BearerToken                    "eyJ..." `
-        -EntraId                        "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
-        -ScaEntraAppId                  "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
-        -ScaResourcesAppId              "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
-        -ScaIdentityTrustedUserEntra    "SCA_ISOLATED_SYSTEM_USER_FOR_AZURE_..._ENTRA" `
+        -Phase                           2 `
+        -Subdomain                       "acme" `
+        -ClientId                        "svc-account@acme" `
+        -ClientSecret                    "s3cr3t" `
+        -EntraId                         "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
+        -ScaEntraAppId                   "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
+        -ScaResourcesAppId               "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
+        -ScaIdentityTrustedUserEntra     "SCA_ISOLATED_SYSTEM_USER_FOR_AZURE_..._ENTRA" `
         -ScaIdentityTrustedUserResources "SCA_ISOLATED_SYSTEM_USER_FOR_AZURE_..._RESOURCE" `
-        -CceAppId                       "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+        -CceAppId                        "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
 #>
 
 [CmdletBinding()]
 param (
     [Parameter(Mandatory)][ValidateSet(1, 2)][int] $Phase,
     [Parameter(Mandatory)][string] $Subdomain,
-    [Parameter(Mandatory)][string] $BearerToken,
+    [Parameter(Mandatory)][string] $ClientId,
+    [Parameter(Mandatory)][string] $ClientSecret,
 
     # Phase 2 parameters
     [string] $EntraId,
@@ -105,9 +112,25 @@ function Write-Done {
 }
 
 $BaseUrl = "https://$Subdomain.cloudonboarding.cyberark.cloud"
-$Headers = @{
-    Authorization  = "Bearer $BearerToken"
-    'Content-Type' = 'application/json'
+
+function Get-CyberArkToken {
+    $tokenResponse = Invoke-RestMethod `
+        -Method Post `
+        -Uri    "https://$Subdomain.id.cyberark.cloud/oauth2/platformtoken" `
+        -Body   @{
+            grant_type    = 'client_credentials'
+            client_id     = $ClientId
+            client_secret = $ClientSecret
+        }
+    return $tokenResponse.access_token
+}
+
+function New-AuthHeaders {
+    $token = Get-CyberArkToken
+    return @{
+        Authorization  = "Bearer $token"
+        'Content-Type' = 'application/json'
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -115,6 +138,10 @@ $Headers = @{
 # ---------------------------------------------------------------------------
 
 if ($Phase -eq 1) {
+
+    Write-Step "Step 2.1 — Obtaining bearer token from CyberArk ISP"
+    $Headers = New-AuthHeaders
+    Write-Done "Bearer token retrieved"
 
     Write-Step "Step 2.2 — Calling GET /api/azure/identity-params"
 
@@ -188,6 +215,10 @@ if ($missing.Count -gt 0) {
 }
 
 # -- Step 3.2 — POST /api/azure/manual ---------------------------------------
+
+Write-Step "Step 3.1 — Obtaining bearer token from CyberArk ISP"
+$Headers = New-AuthHeaders
+Write-Done "Bearer token retrieved"
 
 Write-Step "Step 3.2 — Calling POST /api/azure/manual to register the Entra tenant"
 
