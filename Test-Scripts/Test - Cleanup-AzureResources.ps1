@@ -1,18 +1,24 @@
 #Requires -Version 7.0
 <#
 .SYNOPSIS
-    Removes all Azure resources created by Stream B for a given tenant and platform.
+    Removes all Azure resources created by Stream B and optionally deregisters
+    the tenant from CyberArk ISP (Stream A).
 
 .DESCRIPTION
     Deletes in the correct reverse order to avoid dependency conflicts:
       1. Role assignments (SCA Entra, SCA Resources, CCE)
       2. Custom role definitions (SCA Entra role, SCA Resources role)
-      3. Federated credentials on all three apps
-      4. App registrations and their service principals
+      3. App registrations and their service principals + federated credentials
+      4. CyberArk ISP — deregisters the tenant via DELETE /api/azure/tenants/{onboardingId}
+         (only runs when -Subdomain, -BearerToken, and -OnboardingId are all provided)
 
     Safe to run after a successful or failed Stream B execution.
-    Does not touch the CyberArk ISP side — if the tenant was successfully
-    registered, remove it separately from the CyberArk portal or API.
+    Step 4 is skipped if any of the three CyberArk parameters are omitted.
+
+    NOTE: The CyberArk delete endpoint used in Step 4 is
+          DELETE /api/azure/tenants/{onboardingId}
+    This follows the standard CCE API pattern. Verify against your tenant's
+    API documentation if the call returns 404.
 
 .PARAMETER EntraId
     The GUID of the Azure AD (Entra) tenant that was onboarded.
@@ -20,18 +26,44 @@
 .PARAMETER Platform
     The platform name used when running Stream B (e.g. "Idira" or "CyberArk").
 
+.PARAMETER Subdomain
+    (Optional) CyberArk ISP tenant subdomain.
+    Required together with -BearerToken and -OnboardingId to run Step 4.
+
+.PARAMETER BearerToken
+    (Optional) Valid bearer token for the CyberArk Identity Security Platform.
+    Required together with -Subdomain and -OnboardingId to run Step 4.
+
+.PARAMETER OnboardingId
+    (Optional) The onboarding ID returned by Stream A Phase 2.
+    Required together with -Subdomain and -BearerToken to run Step 4.
+
 .PARAMETER Force
     Skip the confirmation prompt and delete immediately.
 
 .EXAMPLE
+    # Azure cleanup only
     .\Test - Cleanup-AzureResources.ps1 `
         -EntraId  "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
         -Platform "Idira"
 
 .EXAMPLE
+    # Full cleanup — Azure + CyberArk ISP
     .\Test - Cleanup-AzureResources.ps1 `
-        -EntraId  "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
-        -Platform "Idira" `
+        -EntraId       "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
+        -Platform      "Idira" `
+        -Subdomain     "acme" `
+        -BearerToken   "eyJ..." `
+        -OnboardingId  "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+
+.EXAMPLE
+    # Full cleanup without confirmation prompt
+    .\Test - Cleanup-AzureResources.ps1 `
+        -EntraId       "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
+        -Platform      "Idira" `
+        -Subdomain     "acme" `
+        -BearerToken   "eyJ..." `
+        -OnboardingId  "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
         -Force
 #>
 
@@ -39,6 +71,9 @@
 param (
     [Parameter(Mandatory)][string] $EntraId,
     [Parameter(Mandatory)][string] $Platform,
+    [string] $Subdomain,
+    [string] $BearerToken,
+    [string] $OnboardingId,
     [switch] $Force
 )
 
@@ -137,12 +172,19 @@ Write-Host "  CCE App ID          : $(if ($CceAppId)          { $CceAppId }     
 # Confirmation
 # ---------------------------------------------------------------------------
 
+$CyberArkCleanup = $Subdomain -and $BearerToken -and $OnboardingId
+
 if (-not $Force) {
     Write-Host ""
     Write-Host "  The following will be permanently deleted:" -ForegroundColor Yellow
     Write-Host "    - App registrations: $ScaEntraAppName, $ScaResourcesAppName, $CceAppName"
     Write-Host "    - Custom roles:      $ScaEntraRoleName, $ScaResourcesRoleName"
     Write-Host "    - All associated service principals, federated credentials, and role assignments"
+    if ($CyberArkCleanup) {
+        Write-Host "    - CyberArk ISP tenant registration (onboarding ID: $OnboardingId)"
+    } else {
+        Write-Host "    - CyberArk ISP: SKIPPED (no -Subdomain / -BearerToken / -OnboardingId provided)" -ForegroundColor DarkGray
+    }
     Write-Host ""
     $confirm = Read-Host "  Type 'yes' to proceed"
     if ($confirm -ne 'yes') {
@@ -183,13 +225,50 @@ Remove-AppIfExists $ScaResourcesAppId $ScaResourcesAppName
 Remove-AppIfExists $CceAppId          $CceAppName
 
 # ---------------------------------------------------------------------------
+# Step 4 — Deregister tenant from CyberArk ISP (Stream A cleanup)
+# ---------------------------------------------------------------------------
+
+Write-Step "Step 4 — Deregistering tenant from CyberArk ISP"
+
+if (-not $CyberArkCleanup) {
+    Write-Skip "CyberArk ISP cleanup (-Subdomain, -BearerToken, and -OnboardingId not all provided)"
+} else {
+    try {
+        $BaseUrl = "https://$Subdomain.cloudonboarding.cyberark.cloud"
+        $Headers = @{
+            Authorization  = "Bearer $BearerToken"
+            'Content-Type' = 'application/json'
+        }
+
+        # NOTE: endpoint follows the standard CCE REST pattern for tenant deletion.
+        # If this returns 404, verify the exact URL against your tenant's API docs.
+        $Response = Invoke-RestMethod `
+            -Method  Delete `
+            -Uri     "$BaseUrl/api/azure/tenants/$OnboardingId" `
+            -Headers $Headers
+
+        Write-Done "Tenant '$OnboardingId' deregistered from CyberArk ISP"
+    } catch {
+        $statusCode = $_.Exception.Response.StatusCode.value__
+        if ($statusCode -eq 404) {
+            Write-Skip "Tenant '$OnboardingId' not found in CyberArk ISP (already removed or never registered)"
+        } else {
+            Write-Warn "Could not deregister tenant from CyberArk ISP: $_"
+        }
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Summary
 # ---------------------------------------------------------------------------
 
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor Green
 Write-Host "  Cleanup complete." -ForegroundColor Green
-Write-Host "  If the tenant was successfully registered in CyberArk ISP," -ForegroundColor Green
-Write-Host "  remove it separately from the CyberArk portal or API." -ForegroundColor Green
+if (-not $CyberArkCleanup) {
+    Write-Host "  NOTE: CyberArk ISP cleanup was skipped." -ForegroundColor Yellow
+    Write-Host "  To also remove the tenant registration, re-run with:" -ForegroundColor Yellow
+    Write-Host "    -Subdomain <subdomain> -BearerToken <token> -OnboardingId <id>" -ForegroundColor Yellow
+}
 Write-Host "================================================================" -ForegroundColor Green
 Write-Host ""
