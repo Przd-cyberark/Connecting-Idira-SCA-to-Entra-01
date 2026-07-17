@@ -56,7 +56,7 @@ function Invoke-Az {
     param([string[]]$Arguments)
     $output = az @Arguments 2>&1
     if ($LASTEXITCODE -ne 0) { throw "az $($Arguments -join ' ') failed: $output" }
-    return $output
+    return [string]$output
 }
 
 # ---------------------------------------------------------------------------
@@ -84,9 +84,9 @@ Write-Host ""
 
 Write-Host "  Resolving app IDs..." -ForegroundColor DarkGray
 
-$ScaEntraAppId     = (Invoke-Az @('ad','app','list','--display-name',$ScaEntraAppName,'--query','[0].appId','--output','tsv')).Trim()
-$ScaResourcesAppId = (Invoke-Az @('ad','app','list','--display-name',$ScaResourcesAppName,'--query','[0].appId','--output','tsv')).Trim()
-$CceAppId          = (Invoke-Az @('ad','app','list','--display-name',$CceAppName,'--query','[0].appId','--output','tsv')).Trim()
+$ScaEntraAppId     = [string](az ad app list --display-name $ScaEntraAppName     --query '[0].appId' --output tsv 2>$null)
+$ScaResourcesAppId = [string](az ad app list --display-name $ScaResourcesAppName --query '[0].appId' --output tsv 2>$null)
+$CceAppId          = [string](az ad app list --display-name $CceAppName          --query '[0].appId' --output tsv 2>$null)
 
 Write-Host "  SCA Entra App ID    : $ScaEntraAppId"
 Write-Host "  SCA Resources App ID: $ScaResourcesAppId"
@@ -192,18 +192,18 @@ Test-Check 11 "CCE app has 'Management Group Reader' assignment at management gr
 # Checks 12–14: Admin consent (Graph app role assignments)
 # ---------------------------------------------------------------------------
 
-$ScaEntraSPId     = (Invoke-Az @('ad','sp','show','--id',$ScaEntraAppId,'--query','id','--output','tsv')).Trim()
-$ScaResourcesSPId = (Invoke-Az @('ad','sp','show','--id',$ScaResourcesAppId,'--query','id','--output','tsv')).Trim()
-$CceSPId          = (Invoke-Az @('ad','sp','show','--id',$CceAppId,'--query','id','--output','tsv')).Trim()
+$ScaEntraSPId     = if ($ScaEntraAppId)     { (Invoke-Az @('ad','sp','show','--id',$ScaEntraAppId,'--query','id','--output','tsv')).Trim() } else { '' }
+$ScaResourcesSPId = if ($ScaResourcesAppId) { (Invoke-Az @('ad','sp','show','--id',$ScaResourcesAppId,'--query','id','--output','tsv')).Trim() } else { '' }
+$CceSPId          = if ($CceAppId)          { (Invoke-Az @('ad','sp','show','--id',$CceAppId,'--query','id','--output','tsv')).Trim() } else { '' }
 
 $ScaEntraExpectedRoles = @(
-    '9e3f62cf-723e-4eba-9247-35def7408f82'   # RoleManagement.Read.Directory
-    '62a82d76-70ea-4829-96f2-1b1e37f5aa90'   # Group.ReadWrite.All
+    '483bed4a-2ad3-4361-a73b-c83ccdbdc53c'   # RoleManagement.Read.Directory
+    '62a82d76-70ea-41e2-9197-370581804d09'   # Group.ReadWrite.All
     '97235f07-e226-4f63-ace3-39588e11d3a1'   # User.ReadBasic.All
 )
 
 $ScaResourcesExpectedRoles = @(
-    '62a82d76-70ea-4829-96f2-1b1e37f5aa90'   # Group.ReadWrite.All
+    '62a82d76-70ea-41e2-9197-370581804d09'   # Group.ReadWrite.All
     '97235f07-e226-4f63-ace3-39588e11d3a1'   # User.ReadBasic.All
     'dbaae8cf-10b5-4b86-a4a1-f871c94c6695'   # GroupMember.ReadWrite.All
     'bf7b1a76-6e77-406b-b258-bf5c7720e98f'   # Group.Create
@@ -245,8 +245,8 @@ Test-Check 14 "CCE app has admin consent for 1 Graph permission" {
 # Summary
 # ---------------------------------------------------------------------------
 
-$passed = ($results | Where-Object { $_.Result -eq 'PASS' }).Count
-$failed = ($results | Where-Object { $_.Result -eq 'FAIL' }).Count
+$passed = @($results | Where-Object { $_.Result -eq 'PASS' }).Count
+$failed = @($results | Where-Object { $_.Result -eq 'FAIL' }).Count
 
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor Cyan

@@ -101,8 +101,8 @@ param (
     [string] $EntraId,
     [string] $ScaEntraAppId,
     [string] $ScaResourcesAppId,
-    [string] $ScaIdentityTrustedUserEntra,
-    [string] $ScaIdentityTrustedUserResources,
+    [string] $ScaIdentityTrustedUserEntra,    # auto-derived if omitted
+    [string] $ScaIdentityTrustedUserResources, # auto-derived if omitted
     [string] $CceAppId
 )
 
@@ -224,12 +224,10 @@ if ($Phase -eq 1) {
 # ---------------------------------------------------------------------------
 
 $missing = @()
-if (-not $EntraId)                         { $missing += '-EntraId' }
-if (-not $ScaEntraAppId)                   { $missing += '-ScaEntraAppId' }
-if (-not $ScaResourcesAppId)               { $missing += '-ScaResourcesAppId' }
-if (-not $ScaIdentityTrustedUserEntra)     { $missing += '-ScaIdentityTrustedUserEntra' }
-if (-not $ScaIdentityTrustedUserResources) { $missing += '-ScaIdentityTrustedUserResources' }
-if (-not $CceAppId)                        { $missing += '-CceAppId' }
+if (-not $EntraId)         { $missing += '-EntraId' }
+if (-not $ScaEntraAppId)   { $missing += '-ScaEntraAppId' }
+if (-not $ScaResourcesAppId) { $missing += '-ScaResourcesAppId' }
+if (-not $CceAppId)        { $missing += '-CceAppId' }
 
 if ($missing.Count -gt 0) {
     Write-Error "Phase 2 requires the following parameters that are missing: $($missing -join ', ')"
@@ -238,6 +236,26 @@ if ($missing.Count -gt 0) {
 Write-Step "Step 3.1 - Obtaining bearer token from CyberArk ISP"
 $Headers = New-AuthHeaders -TenantId $IdentityTenantId -Id $ClientId -Secret $ClientSecret
 Write-Done "Bearer token retrieved"
+
+# Derive identity trusted usernames if not supplied explicitly.
+# Format: SCA_ISOLATED_SYSTEM_USER_FOR_AZURE_<last-segment-of-CyberArk-tenantId>_<last-segment-of-EntraId>_ENTRA/RESOURCE
+# The CyberArk tenant ID is obtained from GET /api/azure/identity-params (tenantId field).
+if (-not $ScaIdentityTrustedUserEntra -or -not $ScaIdentityTrustedUserResources) {
+    Write-Host "    Deriving SCA identity trusted usernames from tenant IDs..." -ForegroundColor DarkGray
+    $identityParams = Invoke-RestMethod -Method Get -Uri "$BaseUrl/api/azure/identity-params" -Headers $Headers
+    $cyberArkTenantId = $identityParams.tenantId
+    $shortSca   = ($cyberArkTenantId -split '-')[-1].ToUpper()
+    $shortEntra = ($EntraId          -split '-')[-1].ToUpper()
+    $uniqueId   = "${shortSca}_${shortEntra}"
+    if (-not $ScaIdentityTrustedUserEntra) {
+        $ScaIdentityTrustedUserEntra = "SCA_ISOLATED_SYSTEM_USER_FOR_AZURE_${uniqueId}_ENTRA"
+    }
+    if (-not $ScaIdentityTrustedUserResources) {
+        $ScaIdentityTrustedUserResources = "SCA_ISOLATED_SYSTEM_USER_FOR_AZURE_${uniqueId}_RESOURCE"
+    }
+    Write-Host "    Entra   username: $ScaIdentityTrustedUserEntra" -ForegroundColor DarkGray
+    Write-Host "    Resource username: $ScaIdentityTrustedUserResources" -ForegroundColor DarkGray
+}
 
 Write-Step "Step 3.2 - Calling POST /api/azure/manual to register the Entra tenant"
 
@@ -266,17 +284,29 @@ $Body = @{
     }
 } | ConvertTo-Json -Depth 10
 
-$Response = Invoke-RestMethod `
-    -Method  Post `
-    -Uri     "$BaseUrl/api/azure/manual" `
-    -Headers $Headers `
-    -Body    $Body
-
-Write-Done "Tenant registered successfully."
-
-if ($Response.id)               { $OnboardingId = $Response.id }
-elseif ($Response.onboardingId) { $OnboardingId = $Response.onboardingId }
-else                            { $OnboardingId = $Response.PSObject.Properties.Value[0] }
+$OnboardingId = $null
+$Response     = $null
+try {
+    $Response = Invoke-RestMethod `
+        -Method  Post `
+        -Uri     "$BaseUrl/api/azure/manual" `
+        -Headers $Headers `
+        -Body    $Body
+    Write-Done "Tenant registered successfully."
+    if ($Response.id)               { $OnboardingId = $Response.id }
+    elseif ($Response.onboardingId) { $OnboardingId = $Response.onboardingId }
+    else                            { $OnboardingId = $Response.PSObject.Properties.Value[0] }
+} catch {
+    $statusCode = $_.Exception.Response.StatusCode.value__
+    if ($statusCode -eq 409) {
+        Write-Host "    WARN: Tenant already registered in CyberArk ISP (409 Conflict)." -ForegroundColor Yellow
+        Write-Host "    The onboarding ID is not available from this response." -ForegroundColor Yellow
+        Write-Host "    Check the CyberArk ISP portal or use the cleanup script to remove and re-register." -ForegroundColor Yellow
+        $OnboardingId = "(already registered - check portal)"
+    } else {
+        throw
+    }
+}
 
 Write-Host ""
 Write-Host "================================================================" -ForegroundColor Yellow
@@ -286,6 +316,8 @@ Write-Host "================================================================" -F
 Write-Host ""
 Write-Host "  Onboarding ID: $OnboardingId"
 Write-Host ""
-Write-Host "  Full API response:" -ForegroundColor DarkGray
-$Response | ConvertTo-Json -Depth 10 | Write-Host
+if ($Response) {
+    Write-Host "  Full API response:" -ForegroundColor DarkGray
+    $Response | ConvertTo-Json -Depth 10 | Write-Host
+}
 Write-Host ""
