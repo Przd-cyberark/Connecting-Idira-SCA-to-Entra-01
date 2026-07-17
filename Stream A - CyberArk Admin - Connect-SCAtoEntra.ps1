@@ -65,7 +65,7 @@
     (Phase 2) Application (client) ID of the CCE app created by the Azure admin.
 
 .EXAMPLE
-    # Phase 1 — retrieve identity parameters
+    # Phase 1 - retrieve identity parameters
     .\Stream A - CyberArk Admin - Connect-SCAtoEntra.ps1 `
         -Phase              1 `
         -Subdomain          "acme" `
@@ -74,7 +74,7 @@
         -ClientSecret       "s3cr3t"
 
 .EXAMPLE
-    # Phase 2 — register the tenant
+    # Phase 2 - register the tenant
     .\Stream A - CyberArk Admin - Connect-SCAtoEntra.ps1 `
         -Phase                           2 `
         -Subdomain                       "acme" `
@@ -150,34 +150,34 @@ function Write-Done {
 $BaseUrl = "https://$Subdomain.cloudonboarding.cyberark.cloud"
 $Headers = $null
 
-function Get-CyberArkToken {
+function New-AuthHeaders {
+    param(
+        [string]$TenantId,
+        [string]$Id,
+        [string]$Secret
+    )
     $tokenResponse = Invoke-RestMethod `
         -Method      Post `
-        -Uri         "https://$IdentityTenantId.id.cyberark.cloud/oauth2/platformtoken" `
+        -Uri         "https://$TenantId.id.cyberark.cloud/oauth2/platformtoken" `
         -ContentType 'application/x-www-form-urlencoded' `
-        -Body        "grant_type=client_credentials&client_id=$([uri]::EscapeDataString($ClientId))&client_secret=$([uri]::EscapeDataString($ClientSecret))"
-    return $tokenResponse.access_token
-}
-
-function New-AuthHeaders {
-    $token = Get-CyberArkToken
+        -Body        "grant_type=client_credentials&client_id=$([uri]::EscapeDataString($Id))&client_secret=$([uri]::EscapeDataString($Secret))"
     return @{
-        Authorization  = "Bearer $token"
+        Authorization  = "Bearer $($tokenResponse.access_token)"
         'Content-Type' = 'application/json'
     }
 }
 
 # ---------------------------------------------------------------------------
-# PHASE 1 — Retrieve identity parameters for the Azure admin
+# PHASE 1 - Retrieve identity parameters for the Azure admin
 # ---------------------------------------------------------------------------
 
 if ($Phase -eq 1) {
 
-    Write-Step "Step 2.1 — Obtaining bearer token from CyberArk ISP"
-    $Headers = New-AuthHeaders
+    Write-Step "Step 2.1 - Obtaining bearer token from CyberArk ISP"
+    $Headers = New-AuthHeaders -TenantId $IdentityTenantId -Id $ClientId -Secret $ClientSecret
     Write-Done "Bearer token retrieved"
 
-    Write-Step "Step 2.2 — Calling GET /api/azure/identity-params"
+    Write-Step "Step 2.2 - Calling GET /api/azure/identity-params"
 
     $Response = Invoke-RestMethod `
         -Method  Get `
@@ -193,8 +193,6 @@ if ($Phase -eq 1) {
     Write-Host "================================================================" -ForegroundColor Yellow
     Write-Host ""
 
-    # Print every property returned so nothing is missed regardless of
-    # exact field naming in the API response.
     $Response.PSObject.Properties | ForEach-Object {
         Write-Host ("  {0,-45}: {1}" -f $_.Name, $_.Value)
     }
@@ -203,25 +201,15 @@ if ($Phase -eq 1) {
     Write-Host "  Key values needed by the Azure admin:" -ForegroundColor Yellow
     Write-Host ""
 
-    # Attempt to surface the specific fields the Azure admin needs.
-    # Field names are shown as-received; adjust the property paths if your
-    # tenant's API response uses different casing or nesting.
-    $fields = @(
-        @{ Label = "SCA Identity Issuer (Entra)    "; Path = "scaIdentityIssuerEntra" },
-        @{ Label = "SCA Identity User (Entra)      "; Path = "scaIdentityUserEntra" },
-        @{ Label = "SCA Identity Issuer (Resources)"; Path = "scaIdentityIssuerResources" },
-        @{ Label = "SCA Identity User (Resources)  "; Path = "scaIdentityUserResources" },
-        @{ Label = "CCE Identity Issuer            "; Path = "cceIdentityIssuer" },
-        @{ Label = "CCE Identity User ID           "; Path = "cceIdentityUserId" },
-        @{ Label = "CCE Identity Audience          "; Path = "cceIdentityAudience" }
-    )
-
-    foreach ($field in $fields) {
-        $value = $Response.($field.Path)
-        if ($value) {
-            Write-Host ("  {0}: {1}" -f $field.Label, $value)
-        }
-    }
+    Write-Host ("  {0,-45}: {1}" -f "SCA identity_user_id",        $Response.sca.identity_user_id)
+    Write-Host ("  {0,-45}: {1}" -f "SCA identity_app_issuer",     $Response.sca.identity_app_issuer)
+    Write-Host ("  {0,-45}: {1}" -f "SCA identity_app_audience",   $Response.sca.identity_app_audience)
+    Write-Host ("  {0,-45}: {1}" -f "SCA identity_app_id",         $Response.sca.identity_app_id)
+    Write-Host ""
+    Write-Host ("  {0,-45}: {1}" -f "CCE identity_user_id",        $Response.cloud_onboarding.identity_user_id)
+    Write-Host ("  {0,-45}: {1}" -f "CCE identity_app_issuer",     $Response.cloud_onboarding.identity_app_issuer)
+    Write-Host ("  {0,-45}: {1}" -f "CCE identity_app_audience",   $Response.cloud_onboarding.identity_app_audience)
+    Write-Host ("  {0,-45}: {1}" -f "CCE identity_app_id",         $Response.cloud_onboarding.identity_app_id)
 
     Write-Host ""
     Write-Host "  Next step: share these values with the Azure admin and wait" -ForegroundColor DarkGray
@@ -232,29 +220,26 @@ if ($Phase -eq 1) {
 }
 
 # ---------------------------------------------------------------------------
-# PHASE 2 — Register the Entra tenant in CCE
+# PHASE 2 - Register the Entra tenant in CCE
 # ---------------------------------------------------------------------------
 
-# Validate that all Phase 2 parameters were supplied.
 $missing = @()
-if (-not $EntraId)                        { $missing += '-EntraId' }
-if (-not $ScaEntraAppId)                  { $missing += '-ScaEntraAppId' }
-if (-not $ScaResourcesAppId)              { $missing += '-ScaResourcesAppId' }
-if (-not $ScaIdentityTrustedUserEntra)    { $missing += '-ScaIdentityTrustedUserEntra' }
-if (-not $ScaIdentityTrustedUserResources){ $missing += '-ScaIdentityTrustedUserResources' }
-if (-not $CceAppId)                       { $missing += '-CceAppId' }
+if (-not $EntraId)                         { $missing += '-EntraId' }
+if (-not $ScaEntraAppId)                   { $missing += '-ScaEntraAppId' }
+if (-not $ScaResourcesAppId)               { $missing += '-ScaResourcesAppId' }
+if (-not $ScaIdentityTrustedUserEntra)     { $missing += '-ScaIdentityTrustedUserEntra' }
+if (-not $ScaIdentityTrustedUserResources) { $missing += '-ScaIdentityTrustedUserResources' }
+if (-not $CceAppId)                        { $missing += '-CceAppId' }
 
 if ($missing.Count -gt 0) {
     Write-Error "Phase 2 requires the following parameters that are missing: $($missing -join ', ')"
 }
 
-# -- Step 3.2 — POST /api/azure/manual ---------------------------------------
-
-Write-Step "Step 3.1 — Obtaining bearer token from CyberArk ISP"
-$Headers = New-AuthHeaders
+Write-Step "Step 3.1 - Obtaining bearer token from CyberArk ISP"
+$Headers = New-AuthHeaders -TenantId $IdentityTenantId -Id $ClientId -Secret $ClientSecret
 Write-Done "Bearer token retrieved"
 
-Write-Step "Step 3.2 — Calling POST /api/azure/manual to register the Entra tenant"
+Write-Step "Step 3.2 - Calling POST /api/azure/manual to register the Entra tenant"
 
 $Body = @{
     deploymentType = "organization"
@@ -265,11 +250,11 @@ $Body = @{
             resources   = @{
                 applications = @(
                     @{
-                        application_id           = $ScaEntraAppId
+                        application_id            = $ScaEntraAppId
                         identity_trusted_username = $ScaIdentityTrustedUserEntra
                     },
                     @{
-                        application_id           = $ScaResourcesAppId
+                        application_id            = $ScaResourcesAppId
                         identity_trusted_username = $ScaIdentityTrustedUserResources
                     }
                 )
@@ -289,9 +274,7 @@ $Response = Invoke-RestMethod `
 
 Write-Done "Tenant registered successfully."
 
-# -- Step 3.3 — Save the onboarding ID --------------------------------------
-
-if ($Response.id)             { $OnboardingId = $Response.id }
+if ($Response.id)               { $OnboardingId = $Response.id }
 elseif ($Response.onboardingId) { $OnboardingId = $Response.onboardingId }
 else                            { $OnboardingId = $Response.PSObject.Properties.Value[0] }
 
