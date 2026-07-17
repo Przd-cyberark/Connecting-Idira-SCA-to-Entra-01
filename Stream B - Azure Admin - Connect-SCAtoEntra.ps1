@@ -108,17 +108,18 @@ function Grant-GraphAppRole {
         [string] $PermissionName
     )
     Write-Host "    Granting $PermissionName ..." -ForegroundColor DarkGray
-    $body = @{
+    $bodyFile = [System.IO.Path]::GetTempFileName() + '.json'
+    @{
         principalId = $PrincipalId
         resourceId  = $GraphResourceId
         appRoleId   = $AppRoleId
-    } | ConvertTo-Json -Compress
-
+    } | ConvertTo-Json | Set-Content -Path $bodyFile -Encoding UTF8
     Invoke-Az @(
         'rest', '--method', 'POST',
         '--url', "https://graph.microsoft.com/v1.0/servicePrincipals/$PrincipalId/appRoleAssignments",
-        '--body', $body
+        '--body', "@$bodyFile"
     ) | Out-Null
+    Remove-Item $bodyFile -Force
 }
 
 # ---------------------------------------------------------------------------
@@ -157,23 +158,31 @@ $ScaResourcesRoleName = "$Platform-SCA-resources-role"
 
 # -- Step 1.2 / 1.3  Custom role definitions ---------------------------------
 
+function New-OrGetRole {
+    param([string]$RoleName, [hashtable]$RoleDef)
+    $existing = az role definition list --name $RoleName --query '[0]' --output json 2>$null | ConvertFrom-Json
+    if ($existing) {
+        Write-Host "    SKIP: role '$RoleName' already exists" -ForegroundColor DarkGray
+        return $existing
+    }
+    $tmpFile = [System.IO.Path]::GetTempFileName() + '.json'
+    $RoleDef | ConvertTo-Json -Depth 5 | Set-Content -Path $tmpFile -Encoding UTF8
+    $result = Invoke-Az @('role', 'definition', 'create', '--role-definition', "@$tmpFile", '--output', 'json') | ConvertFrom-Json
+    Remove-Item $tmpFile -Force
+    return $result
+}
+
 Write-Step "Creating custom role: $ScaEntraRoleName (no Actions)"
-$ScaEntraRoleDef = @{
+$ScaEntraRoleResult = New-OrGetRole -RoleName $ScaEntraRoleName -RoleDef @{
     Name             = $ScaEntraRoleName
     IsCustom         = $true
     Actions          = @()
     AssignableScopes = @($RoleScope)
-} | ConvertTo-Json -Depth 5 -Compress
-
-$ScaEntraRoleResult = Invoke-Az @(
-    'role', 'definition', 'create',
-    '--role-definition', $ScaEntraRoleDef,
-    '--output', 'json'
-) | ConvertFrom-Json
-Write-Done "Created role: $($ScaEntraRoleResult.roleName)"
+}
+Write-Done "Role ready: $($ScaEntraRoleResult.roleName)"
 
 Write-Step "Creating custom role: $ScaResourcesRoleName"
-$ScaResourcesRoleDef = @{
+$ScaResourcesRoleResult = New-OrGetRole -RoleName $ScaResourcesRoleName -RoleDef @{
     Name             = $ScaResourcesRoleName
     IsCustom         = $true
     Actions          = @(
@@ -185,58 +194,56 @@ $ScaResourcesRoleDef = @{
         'Microsoft.Management/managementGroups/read'
     )
     AssignableScopes = @($RoleScope)
-} | ConvertTo-Json -Depth 5 -Compress
-
-$ScaResourcesRoleResult = Invoke-Az @(
-    'role', 'definition', 'create',
-    '--role-definition', $ScaResourcesRoleDef,
-    '--output', 'json'
-) | ConvertFrom-Json
-Write-Done "Created role: $($ScaResourcesRoleResult.roleName)"
+}
+Write-Done "Role ready: $($ScaResourcesRoleResult.roleName)"
 
 # -- Step 1.4  App registrations ---------------------------------------------
 
 Write-Step "Creating app registration: $ScaEntraAppName"
-$ScaEntraPermissions = @(
+$ScaEntraPermFile = [System.IO.Path]::GetTempFileName() + '.json'
+@(
     @{
         resourceAppId  = $GraphAppId
         resourceAccess = @(
-            @{ id = '9e3f62cf-723e-4eba-9247-35def7408f82'; type = 'Role' }   # RoleManagement.Read.Directory
-            @{ id = '62a82d76-70ea-4829-96f2-1b1e37f5aa90'; type = 'Role' }   # Group.ReadWrite.All
-            @{ id = '97235f07-e226-4f63-ace3-39588e11d3a1'; type = 'Role' }   # User.ReadBasic.All
+            @{ id = '483bed4a-2ad3-4361-a73b-c83ccdbdc53c'; type = 'Role' }
+            @{ id = '62a82d76-70ea-41e2-9197-370581804d09'; type = 'Role' }
+            @{ id = '97235f07-e226-4f63-ace3-39588e11d3a1'; type = 'Role' }
         )
     }
-) | ConvertTo-Json -Depth 5 -Compress
+) | ConvertTo-Json -Depth 5 | Set-Content -Path $ScaEntraPermFile -Encoding UTF8
 
 $ScaEntraAppId = (Invoke-Az @(
     'ad', 'app', 'create',
     '--display-name', $ScaEntraAppName,
-    '--required-resource-accesses', $ScaEntraPermissions,
+    '--required-resource-accesses', "@$ScaEntraPermFile",
     '--query', 'appId',
     '--output', 'tsv'
 )).Trim()
+Remove-Item $ScaEntraPermFile -Force
 Write-Done "SCA Entra App ID: $ScaEntraAppId"
 
 Write-Step "Creating app registration: $ScaResourcesAppName"
-$ScaResourcesPermissions = @(
+$ScaResourcesPermFile = [System.IO.Path]::GetTempFileName() + '.json'
+@(
     @{
         resourceAppId  = $GraphAppId
         resourceAccess = @(
-            @{ id = '62a82d76-70ea-4829-96f2-1b1e37f5aa90'; type = 'Role' }   # Group.ReadWrite.All
-            @{ id = '97235f07-e226-4f63-ace3-39588e11d3a1'; type = 'Role' }   # User.ReadBasic.All
-            @{ id = 'dbaae8cf-10b5-4b86-a4a1-f871c94c6695'; type = 'Role' }   # GroupMember.ReadWrite.All
-            @{ id = 'bf7b1a76-6e77-406b-b258-bf5c7720e98f'; type = 'Role' }   # Group.Create
+            @{ id = '62a82d76-70ea-41e2-9197-370581804d09'; type = 'Role' }
+            @{ id = '97235f07-e226-4f63-ace3-39588e11d3a1'; type = 'Role' }
+            @{ id = 'dbaae8cf-10b5-4b86-a4a1-f871c94c6695'; type = 'Role' }
+            @{ id = 'bf7b1a76-6e77-406b-b258-bf5c7720e98f'; type = 'Role' }
         )
     }
-) | ConvertTo-Json -Depth 5 -Compress
+) | ConvertTo-Json -Depth 5 | Set-Content -Path $ScaResourcesPermFile -Encoding UTF8
 
 $ScaResourcesAppId = (Invoke-Az @(
     'ad', 'app', 'create',
     '--display-name', $ScaResourcesAppName,
-    '--required-resource-accesses', $ScaResourcesPermissions,
+    '--required-resource-accesses', "@$ScaResourcesPermFile",
     '--query', 'appId',
     '--output', 'tsv'
 )).Trim()
+Remove-Item $ScaResourcesPermFile -Force
 Write-Done "SCA Resources App ID: $ScaResourcesAppId"
 
 # -- Step 1.5  Service principals --------------------------------------------
@@ -262,33 +269,35 @@ Write-Done "SCA Resources SP object ID: $ScaResourcesPrincipalId"
 # -- Step 1.6  Federated credentials -----------------------------------------
 
 Write-Step "Creating federated credential on SCA Entra app"
-$ScaEntraCred = @{
+$ScaEntraCredFile = [System.IO.Path]::GetTempFileName() + '.json'
+@{
     name      = 'sca-entra-federated-credential'
     issuer    = $ScaIdentityIssuerEntra
     subject   = $ScaIdentityUserEntra
     audiences = @($FederatedAudience)
-} | ConvertTo-Json -Compress
-
+} | ConvertTo-Json | Set-Content -Path $ScaEntraCredFile -Encoding UTF8
 Invoke-Az @(
     'ad', 'app', 'federated-credential', 'create',
     '--id', $ScaEntraAppId,
-    '--parameters', $ScaEntraCred
+    '--parameters', "@$ScaEntraCredFile"
 ) | Out-Null
+Remove-Item $ScaEntraCredFile -Force
 Write-Done "Federated credential created on $ScaEntraAppName"
 
 Write-Step "Creating federated credential on SCA Resources app"
-$ScaResourcesCred = @{
+$ScaResourcesCredFile = [System.IO.Path]::GetTempFileName() + '.json'
+@{
     name      = 'sca-resources-federated-credential'
     issuer    = $ScaIdentityIssuerResources
     subject   = $ScaIdentityUserResources
     audiences = @($FederatedAudience)
-} | ConvertTo-Json -Compress
-
+} | ConvertTo-Json | Set-Content -Path $ScaResourcesCredFile -Encoding UTF8
 Invoke-Az @(
     'ad', 'app', 'federated-credential', 'create',
     '--id', $ScaResourcesAppId,
-    '--parameters', $ScaResourcesCred
+    '--parameters', "@$ScaResourcesCredFile"
 ) | Out-Null
+Remove-Item $ScaResourcesCredFile -Force
 Write-Done "Federated credential created on $ScaResourcesAppName"
 
 # -- Step 1.7  Role assignments ----------------------------------------------
@@ -312,15 +321,19 @@ Invoke-Az @(
 Write-Done "Role assigned"
 
 # -- Step 1.8  Admin consent -------------------------------------------------
+# Wait for app registrations and service principals to propagate in Entra
+# before granting consent — without this, Graph returns 400 "permission not found".
+Write-Host "    Waiting 30s for app registrations to propagate before granting consent..." -ForegroundColor DarkGray
+Start-Sleep -Seconds 30
 
 Write-Step "Granting admin consent for SCA Entra app (3 permissions)"
-Grant-GraphAppRole $ScaEntraPrincipalId $GraphResourceId '9e3f62cf-723e-4eba-9247-35def7408f82' 'RoleManagement.Read.Directory'
-Grant-GraphAppRole $ScaEntraPrincipalId $GraphResourceId '62a82d76-70ea-4829-96f2-1b1e37f5aa90' 'Group.ReadWrite.All'
+Grant-GraphAppRole $ScaEntraPrincipalId $GraphResourceId '483bed4a-2ad3-4361-a73b-c83ccdbdc53c' 'RoleManagement.Read.Directory'
+Grant-GraphAppRole $ScaEntraPrincipalId $GraphResourceId '62a82d76-70ea-41e2-9197-370581804d09' 'Group.ReadWrite.All'
 Grant-GraphAppRole $ScaEntraPrincipalId $GraphResourceId '97235f07-e226-4f63-ace3-39588e11d3a1' 'User.ReadBasic.All'
 Write-Done "Admin consent granted for $ScaEntraAppName"
 
 Write-Step "Granting admin consent for SCA Resources app (4 permissions)"
-Grant-GraphAppRole $ScaResourcesPrincipalId $GraphResourceId '62a82d76-70ea-4829-96f2-1b1e37f5aa90' 'Group.ReadWrite.All'
+Grant-GraphAppRole $ScaResourcesPrincipalId $GraphResourceId '62a82d76-70ea-41e2-9197-370581804d09' 'Group.ReadWrite.All'
 Grant-GraphAppRole $ScaResourcesPrincipalId $GraphResourceId '97235f07-e226-4f63-ace3-39588e11d3a1' 'User.ReadBasic.All'
 Grant-GraphAppRole $ScaResourcesPrincipalId $GraphResourceId 'dbaae8cf-10b5-4b86-a4a1-f871c94c6695' 'GroupMember.ReadWrite.All'
 Grant-GraphAppRole $ScaResourcesPrincipalId $GraphResourceId 'bf7b1a76-6e77-406b-b258-bf5c7720e98f' 'Group.Create'
@@ -335,32 +348,40 @@ $CceAppName = "$Platform-CCE-app"
 # -- Step 2.1  App registration ----------------------------------------------
 
 Write-Step "Creating app registration: $CceAppName"
-$CcePermissions = '[{"resourceAppId":"00000003-0000-0000-c000-000000000000","resourceAccess":[{"id":"cac88765-0581-4025-9725-5ebc13f729ee","type":"Role"}]}]'
+$CcePermFile = [System.IO.Path]::GetTempFileName() + '.json'
+@(
+    @{
+        resourceAppId  = '00000003-0000-0000-c000-000000000000'
+        resourceAccess = @(
+            @{ id = 'cac88765-0581-4025-9725-5ebc13f729ee'; type = 'Role' }
+        )
+    }
+) | ConvertTo-Json -Depth 5 | Set-Content -Path $CcePermFile -Encoding UTF8
 
 $CceAppId = (Invoke-Az @(
     'ad', 'app', 'create',
     '--display-name', $CceAppName,
-    '--required-resource-accesses', $CcePermissions,
+    '--required-resource-accesses', "@$CcePermFile",
     '--query', 'appId',
     '--output', 'tsv'
 )).Trim()
+Remove-Item $CcePermFile -Force
 Write-Done "CCE App ID: $CceAppId"
 
-# -- Step 2.2 / 2.3  Identity parameters are passed as script parameters; create federated credential --
-
 Write-Step "Creating federated credential on CCE app"
-$CceCred = @{
+$CceCredFile = [System.IO.Path]::GetTempFileName() + '.json'
+@{
     name      = 'cce-federated-credential'
     issuer    = $CceIdentityIssuer
     subject   = $CceIdentityUserId
     audiences = @($CceIdentityAudience)
-} | ConvertTo-Json -Compress
-
+} | ConvertTo-Json | Set-Content -Path $CceCredFile -Encoding UTF8
 Invoke-Az @(
     'ad', 'app', 'federated-credential', 'create',
     '--id', $CceAppId,
-    '--parameters', $CceCred
+    '--parameters', "@$CceCredFile"
 ) | Out-Null
+Remove-Item $CceCredFile -Force
 Write-Done "Federated credential created on $CceAppName"
 
 # -- Step 2.4  Service principal ---------------------------------------------
