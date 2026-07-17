@@ -9,11 +9,12 @@
       1. Role assignments (SCA Entra, SCA Resources, CCE)
       2. Custom role definitions (SCA Entra role, SCA Resources role)
       3. App registrations and their service principals + federated credentials
-      4. CyberArk ISP — deregisters the tenant via DELETE /api/azure/tenants/{onboardingId}
-         (only runs when -Subdomain, -BearerToken, and -OnboardingId are all provided)
+      4. CyberArk ISP -- deregisters the tenant via DELETE /api/azure/tenants/{onboardingId}
+         (only runs when -Subdomain, -IdentityTenantId, -ClientId, -ClientSecret,
+         and -OnboardingId are all provided)
 
     Safe to run after a successful or failed Stream B execution.
-    Step 4 is skipped if any of the three CyberArk parameters are omitted.
+    Step 4 is skipped if any of the five CyberArk parameters are omitted.
 
     NOTE: The CyberArk delete endpoint used in Step 4 is
           DELETE /api/azure/tenants/{onboardingId}
@@ -22,19 +23,22 @@
 
 .PARAMETER EntraId
     The GUID of the Azure AD (Entra) tenant that was onboarded.
+    This is also the root management group ID (same GUID by Azure design).
 
 .PARAMETER Platform
     The platform name used when running Stream B (e.g. "Idira" or "CyberArk").
 
 .PARAMETER Subdomain
     (Optional) CyberArk ISP portal subdomain (e.g. "acme" from acme.cyberark.cloud).
-    Required together with -IdentityTenantId, -ClientId, -ClientSecret, and -OnboardingId to run Step 4.
+    Required together with -IdentityTenantId, -ClientId, -ClientSecret, and -OnboardingId
+    to run Step 4.
 
 .PARAMETER IdentityTenantId
     (Optional) The internal identity tenant ID used to construct the token URL:
     https://<IdentityTenantId>.id.cyberark.cloud/oauth2/platformtoken
     This is NOT the same as the portal subdomain.
-    Required together with -Subdomain, -ClientId, -ClientSecret, and -OnboardingId to run Step 4.
+    Required together with -Subdomain, -ClientId, -ClientSecret, and -OnboardingId
+    to run Step 4.
 
 .PARAMETER ClientId
     (Optional) Client ID of the service account used to authenticate to CyberArk ISP.
@@ -58,7 +62,7 @@
         -Platform "Idira"
 
 .EXAMPLE
-    # Full cleanup — Azure + CyberArk ISP
+    # Full cleanup -- Azure + CyberArk ISP
     .\Test - Cleanup-AzureResources.ps1 `
         -EntraId           "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" `
         -Platform          "Idira" `
@@ -126,7 +130,7 @@ function Write-Step {
 }
 
 function Write-Done  { param([string]$m); Write-Host "    OK: $m" -ForegroundColor Green }
-function Write-Skip  { param([string]$m); Write-Host "    SKIP: $m (not found — already deleted or never created)" -ForegroundColor DarkGray }
+function Write-Skip  { param([string]$m); Write-Host "    SKIP: $m (not found - already deleted or never created)" -ForegroundColor DarkGray }
 function Write-Warn  { param([string]$m); Write-Host "    WARN: $m" -ForegroundColor Yellow }
 
 function Invoke-Az {
@@ -196,9 +200,9 @@ Write-Host "================================================================" -F
 
 Write-Step "Resolving app IDs"
 
-$ScaEntraAppId     = (az ad app list --display-name $ScaEntraAppName     --query '[0].appId' --output tsv 2>$null).Trim()
-$ScaResourcesAppId = (az ad app list --display-name $ScaResourcesAppName --query '[0].appId' --output tsv 2>$null).Trim()
-$CceAppId          = (az ad app list --display-name $CceAppName          --query '[0].appId' --output tsv 2>$null).Trim()
+$ScaEntraAppId     = [string](az ad app list --display-name $ScaEntraAppName     --query '[0].appId' --output tsv 2>$null)
+$ScaResourcesAppId = [string](az ad app list --display-name $ScaResourcesAppName --query '[0].appId' --output tsv 2>$null)
+$CceAppId          = [string](az ad app list --display-name $CceAppName          --query '[0].appId' --output tsv 2>$null)
 
 Write-Host "  SCA Entra App ID    : $(if ($ScaEntraAppId)     { $ScaEntraAppId }     else { '(not found)' })"
 Write-Host "  SCA Resources App ID: $(if ($ScaResourcesAppId) { $ScaResourcesAppId } else { '(not found)' })"
@@ -219,7 +223,7 @@ if (-not $Force) {
     if ($CyberArkCleanup) {
         Write-Host "    - CyberArk ISP tenant registration (onboarding ID: $OnboardingId)"
     } else {
-        Write-Host "    - CyberArk ISP: SKIPPED (no -Subdomain / -IdentityTenantId / -ClientId / -ClientSecret / -OnboardingId provided)" -ForegroundColor DarkGray
+        Write-Host "    - CyberArk ISP: SKIPPED (not all CyberArk parameters provided)" -ForegroundColor DarkGray
     }
     Write-Host ""
     $confirm = Read-Host "  Type 'yes' to proceed"
@@ -230,62 +234,62 @@ if (-not $Force) {
 }
 
 # ---------------------------------------------------------------------------
-# Step 1 — Remove role assignments (before deleting the apps)
+# Step 1 -- Remove role assignments (before deleting the apps)
 # ---------------------------------------------------------------------------
 
-Write-Step "Step 1 — Removing role assignments"
+Write-Step "Step 1 -- Removing role assignments"
 
-Remove-RoleAssignmentIfExists $ScaEntraAppId     $ScaEntraAppName     $ScaEntraRoleName          $RoleScope
-Remove-RoleAssignmentIfExists $ScaResourcesAppId $ScaResourcesAppName $ScaResourcesRoleName      $RoleScope
-Remove-RoleAssignmentIfExists $CceAppId          $CceAppName          'Management Group Reader'  $RoleScope
+Remove-RoleAssignmentIfExists $ScaEntraAppId     $ScaEntraAppName     $ScaEntraRoleName         $RoleScope
+Remove-RoleAssignmentIfExists $ScaResourcesAppId $ScaResourcesAppName $ScaResourcesRoleName     $RoleScope
+Remove-RoleAssignmentIfExists $CceAppId          $CceAppName          'Management Group Reader' $RoleScope
 
 # ---------------------------------------------------------------------------
-# Step 2 — Delete custom role definitions
+# Step 2 -- Delete custom role definitions
 # ---------------------------------------------------------------------------
 
-Write-Step "Step 2 — Deleting custom role definitions"
+Write-Step "Step 2 -- Deleting custom role definitions"
 
 Remove-RoleDefinitionIfExists $ScaEntraRoleName
 Remove-RoleDefinitionIfExists $ScaResourcesRoleName
 
 # ---------------------------------------------------------------------------
-# Step 3 — Delete app registrations
+# Step 3 -- Delete app registrations
 # (deleting an app registration also removes its service principal and
 #  all federated credentials automatically)
 # ---------------------------------------------------------------------------
 
-Write-Step "Step 3 — Deleting app registrations (and their service principals + federated credentials)"
+Write-Step "Step 3 -- Deleting app registrations (and their service principals + federated credentials)"
 
 Remove-AppIfExists $ScaEntraAppId     $ScaEntraAppName
 Remove-AppIfExists $ScaResourcesAppId $ScaResourcesAppName
 Remove-AppIfExists $CceAppId          $CceAppName
 
 # ---------------------------------------------------------------------------
-# Step 4 — Deregister tenant from CyberArk ISP (Stream A cleanup)
+# Step 4 -- Deregister tenant from CyberArk ISP (Stream A cleanup)
 # ---------------------------------------------------------------------------
 
-Write-Step "Step 4 — Deregistering tenant from CyberArk ISP"
+Write-Step "Step 4 -- Deregistering tenant from CyberArk ISP"
 
 if (-not $CyberArkCleanup) {
-    Write-Skip "CyberArk ISP cleanup (-Subdomain, -ClientId, -ClientSecret, and -OnboardingId not all provided)"
+    Write-Skip "CyberArk ISP cleanup (not all parameters provided: -Subdomain, -IdentityTenantId, -ClientId, -ClientSecret, -OnboardingId)"
 } else {
     try {
         $BaseUrl = "https://$Subdomain.cloudonboarding.cyberark.cloud"
 
         Write-Host "    Obtaining bearer token from CyberArk ISP ..." -ForegroundColor DarkGray
+        $encodedId     = [uri]::EscapeDataString($ClientId)
+        $encodedSecret = [uri]::EscapeDataString($ClientSecret)
         $tokenResponse = Invoke-RestMethod `
             -Method      Post `
             -Uri         "https://$IdentityTenantId.id.cyberark.cloud/oauth2/platformtoken" `
             -ContentType 'application/x-www-form-urlencoded' `
-            -Body        "grant_type=client_credentials&client_id=$([uri]::EscapeDataString($ClientId))&client_secret=$([uri]::EscapeDataString($ClientSecret))"
+            -Body        "grant_type=client_credentials&client_id=${encodedId}&client_secret=${encodedSecret}"
         $Headers = @{
             Authorization  = "Bearer $($tokenResponse.access_token)"
             'Content-Type' = 'application/json'
         }
         Write-Host "    Bearer token retrieved" -ForegroundColor DarkGray
 
-        # NOTE: endpoint follows the standard CCE REST pattern for tenant deletion.
-        # If this returns 404, verify the exact URL against your tenant's API docs.
         Invoke-RestMethod `
             -Method  Delete `
             -Uri     "$BaseUrl/api/azure/tenants/$OnboardingId" `
@@ -311,8 +315,9 @@ Write-Host "================================================================" -F
 Write-Host "  Cleanup complete." -ForegroundColor Green
 if (-not $CyberArkCleanup) {
     Write-Host "  NOTE: CyberArk ISP cleanup was skipped." -ForegroundColor Yellow
-    Write-Host "  To also remove the tenant registration, re-run with:" -ForegroundColor Yellow
-    Write-Host "    -Subdomain <subdomain> -ClientId <id> -ClientSecret <secret> -OnboardingId <id>" -ForegroundColor Yellow
+    Write-Host "  To also remove the tenant registration, re-run with all five" -ForegroundColor Yellow
+    Write-Host "  CyberArk parameters: -Subdomain, -IdentityTenantId, -ClientId," -ForegroundColor Yellow
+    Write-Host "  -ClientSecret, -OnboardingId" -ForegroundColor Yellow
 }
 Write-Host "================================================================" -ForegroundColor Green
 Write-Host ""
