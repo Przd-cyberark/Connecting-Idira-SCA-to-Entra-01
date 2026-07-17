@@ -97,6 +97,26 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # ---------------------------------------------------------------------------
+# Pre-flight: warn if ClientSecret contains shell metacharacters
+# ---------------------------------------------------------------------------
+if ($ClientSecret) {
+    $dangerousChars = @('<', '>', '|', '&', '^', '`')
+    $found = $dangerousChars | Where-Object { $ClientSecret.Contains($_) }
+    if ($found) {
+        Write-Host ""
+        Write-Host "  ERROR: -ClientSecret contains shell metacharacter(s): $($found -join ' ')" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "  These characters are stripped or misinterpreted by the shell before" -ForegroundColor Yellow
+        Write-Host "  PowerShell receives the value, causing authentication failures." -ForegroundColor Yellow
+        Write-Host "  Change the service account password to one containing only" -ForegroundColor Yellow
+        Write-Host "  alphanumeric characters and safe symbols (- _ . @), or run this" -ForegroundColor Yellow
+        Write-Host "  script directly from a PowerShell window (not bash)." -ForegroundColor Yellow
+        Write-Host ""
+        exit 1
+    }
+}
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 

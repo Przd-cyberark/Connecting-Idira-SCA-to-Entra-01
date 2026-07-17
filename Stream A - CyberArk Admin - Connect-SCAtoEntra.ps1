@@ -110,6 +110,30 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 # ---------------------------------------------------------------------------
+# Pre-flight: warn if ClientSecret contains shell metacharacters that bash
+# will corrupt when passing arguments via -File or -Command.
+# These characters are safe inside PowerShell but become redirection/pipe
+# operators when the shell interprets the argument before PowerShell sees it.
+# ---------------------------------------------------------------------------
+$dangerousChars = @('<', '>', '|', '&', '^', '`')
+$found = $dangerousChars | Where-Object { $ClientSecret.Contains($_) }
+if ($found) {
+    Write-Host ""
+    Write-Host "  ERROR: -ClientSecret contains shell metacharacter(s): $($found -join ' ')" -ForegroundColor Red
+    Write-Host ""
+    Write-Host "  These characters are stripped or misinterpreted by the shell before" -ForegroundColor Yellow
+    Write-Host "  PowerShell receives the value, causing authentication failures." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  Solutions:" -ForegroundColor Yellow
+    Write-Host "    1. Change the service account password in CyberArk ISP to one that" -ForegroundColor Yellow
+    Write-Host "       contains only alphanumeric characters and safe symbols (- _ . @)." -ForegroundColor Yellow
+    Write-Host "    2. Or run this script directly from a PowerShell window (not bash)" -ForegroundColor Yellow
+    Write-Host "       using single-quoted string: -ClientSecret 'your+secret&here'" -ForegroundColor Yellow
+    Write-Host ""
+    exit 1
+}
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
