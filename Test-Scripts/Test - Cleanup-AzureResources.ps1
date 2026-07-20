@@ -17,9 +17,7 @@
     Step 4 is skipped if any of the five CyberArk parameters are omitted.
 
     NOTE: The CyberArk delete endpoint used in Step 4 is
-          DELETE /api/azure/tenants/{onboardingId}
-    This follows the standard CCE API pattern. Verify against your tenant's
-    API documentation if the call returns 404.
+          DELETE /api/azure/manual/{onboardingId}
 
 .PARAMETER EntraId
     The GUID of the Azure AD (Entra) tenant that was onboarded.
@@ -292,7 +290,7 @@ if (-not $CyberArkCleanup) {
 
         Invoke-RestMethod `
             -Method  Delete `
-            -Uri     "$BaseUrl/api/azure/tenants/$OnboardingId" `
+            -Uri     "$BaseUrl/api/azure/manual/$OnboardingId" `
             -Headers $Headers | Out-Null
 
         Write-Done "Tenant '$OnboardingId' deregistered from CyberArk ISP"
