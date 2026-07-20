@@ -151,13 +151,27 @@ function Remove-AppIfExists {
 
 function Remove-RoleDefinitionIfExists {
     param([string]$RoleName)
-    try {
-        $role = Invoke-Az @('role','definition','list','--name',$RoleName,'--output','json') | ConvertFrom-Json
-        if (-not $role -or $role.Count -eq 0) { Write-Skip "Custom role '$RoleName'"; return }
-        Invoke-Az @('role','definition','delete','--name',$RoleName) | Out-Null
-        Write-Done "Deleted custom role '$RoleName'"
-    } catch {
-        Write-Warn "Could not delete role '$RoleName': $_"
+    # Azure management plane propagation can cause a role to appear absent
+    # immediately after creation even though it exists. Retry up to 3 times.
+    $maxAttempts = 3
+    for ($i = 1; $i -le $maxAttempts; $i++) {
+        try {
+            $role = Invoke-Az @('role','definition','list','--name',$RoleName,'--output','json') | ConvertFrom-Json
+            if (-not $role -or $role.Count -eq 0) {
+                if ($i -lt $maxAttempts) {
+                    Write-Host "    Role '$RoleName' not visible yet, waiting 15s (attempt $i/$maxAttempts)..." -ForegroundColor DarkGray
+                    Start-Sleep -Seconds 15
+                    continue
+                }
+                Write-Skip "Custom role '$RoleName'"; return
+            }
+            Invoke-Az @('role','definition','delete','--name',$RoleName) | Out-Null
+            Write-Done "Deleted custom role '$RoleName'"
+            return
+        } catch {
+            Write-Warn "Could not delete role '$RoleName': $_"
+            return
+        }
     }
 }
 
